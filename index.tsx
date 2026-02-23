@@ -23,6 +23,42 @@ import {
 } from 'lucide-react';
 import { GoogleGenAI, Modality } from "@google/genai";
 
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('App crashed:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center justify-center font-sans text-center">
+          <div className="max-w-md w-full bg-white border border-slate-200 rounded-[2.5rem] p-8 shadow-sm">
+            <h1 className="text-2xl font-black text-slate-900 italic tracking-tighter">Tiny Lessons</h1>
+            <p className="text-slate-500 mt-3">Se produjo un error inesperado. Recarga la página para continuar.</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="mt-6 w-full py-4 bg-slate-900 text-white rounded-[2rem] font-black uppercase tracking-widest active:scale-95 transition-transform"
+            >
+              Recargar
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 // Initialization for TTS
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -194,16 +230,59 @@ const App = () => {
   // Load learned words from local storage
   useEffect(() => {
     const saved = localStorage.getItem('tiny_lessons_progress');
-    if (saved) {
-      setLearnedWords(JSON.parse(saved));
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) setLearnedWords(parsed);
+      else setLearnedWords([]);
+    } catch {
+      localStorage.removeItem('tiny_lessons_progress');
+      setLearnedWords([]);
     }
   }, []);
 
+  // Defensive navigation guards to prevent runtime crashes (blank screen)
+  useEffect(() => {
+    if (view === 'lesson_select') {
+      const levelData = selectedLevel ? CONTENT?.[targetLang]?.[selectedLevel] : null;
+      if (!levelData) {
+        setSelectedLevel(null);
+        setActiveLesson(null);
+        setCurrentIndex(0);
+        setFlipped(false);
+        setView('levels');
+      }
+    }
+
+    if (view === 'lesson') {
+      const levelData = selectedLevel ? CONTENT?.[targetLang]?.[selectedLevel] : null;
+      const items = activeLesson?.items;
+      const hasItems = Array.isArray(items) && items.length > 0;
+      const indexOk = hasItems && currentIndex >= 0 && currentIndex < items.length;
+
+      if (!levelData || !hasItems || !indexOk) {
+        setActiveLesson(null);
+        setCurrentIndex(0);
+        setFlipped(false);
+        setView('levels');
+      }
+    }
+
+    if (view === 'review_quiz') {
+      const ok = Array.isArray(quizItems) && quizItems.length > 0 && quizIndex >= 0 && quizIndex < quizItems.length;
+      if (!ok) {
+        setSelectedAnswer(null);
+        setIsCorrect(null);
+        setQuizScore(0);
+        setView('levels');
+      }
+    }
+  }, [view, targetLang, selectedLevel, activeLesson, currentIndex, quizItems, quizIndex]);
+
   // Effect to automatically save word when flipped
   useEffect(() => {
-    if (flipped && activeLesson && activeLesson.items[currentIndex]) {
-      saveWord(activeLesson.items[currentIndex]);
-    }
+    const item = flipped ? activeLesson?.items?.[currentIndex] : null;
+    if (item) saveWord(item);
   }, [flipped, currentIndex]);
 
   const saveWord = (item: any) => {
@@ -297,8 +376,10 @@ const App = () => {
 
   const handleQuizAnswer = (answer: string) => {
     if (selectedAnswer !== null) return;
+    const current = quizItems?.[quizIndex];
+    if (!current) return;
     setSelectedAnswer(answer);
-    const correct = answer === quizItems[quizIndex].translation;
+    const correct = answer === current.translation;
     setIsCorrect(correct);
     if (correct) setQuizScore(prev => prev + 1);
   };
@@ -490,6 +571,8 @@ const App = () => {
   }
 
   if (view === 'lesson_select') {
+    const levelData = selectedLevel ? CONTENT?.[targetLang]?.[selectedLevel] : null;
+    if (!levelData) return null;
     return (
       <div className="min-h-screen bg-slate-50 p-6">
         <button onClick={() => setView('levels')} className="flex items-center text-slate-500 mb-8 font-bold uppercase text-xs tracking-widest">
@@ -498,7 +581,7 @@ const App = () => {
         <div className="max-w-md mx-auto">
           <h1 className="text-3xl font-black text-slate-900 mb-8 tracking-tighter">{t.lessonsTitle}</h1>
           <div className="grid gap-3">
-            {CONTENT[targetLang][selectedLevel!].lessons.map((lesson: any) => (
+            {levelData.lessons.map((lesson: any) => (
               <button
                 key={lesson.id}
                 onClick={() => {setActiveLesson(lesson); setView('lesson'); setCurrentIndex(0); setFlipped(false);}}
@@ -523,8 +606,9 @@ const App = () => {
   }
 
   if (view === 'lesson') {
-    const card = activeLesson.items[currentIndex];
-    const levelColor = CONTENT[targetLang][selectedLevel!].color;
+    const card = activeLesson?.items?.[currentIndex];
+    const levelColor = selectedLevel ? CONTENT?.[targetLang]?.[selectedLevel]?.color : null;
+    if (!card || !levelColor) return null;
     const progress = ((currentIndex + 1) / activeLesson.items.length) * 100;
 
     return (
@@ -620,7 +704,8 @@ const App = () => {
   }
 
   if (view === 'review_quiz') {
-    const item = quizItems[quizIndex];
+    const item = quizItems?.[quizIndex];
+    if (!item) return null;
     const progress = ((quizIndex + 1) / quizItems.length) * 100;
 
     return (
@@ -742,4 +827,8 @@ const App = () => {
 };
 
 const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
+root.render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);
